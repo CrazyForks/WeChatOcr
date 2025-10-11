@@ -1,11 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFrameworks>net8.0-windows;net7.0-windows;net6.0-windows;net481;net472</TargetFrameworks>
+        <TargetFrameworks>net8.0-windows;net481;net472</TargetFrameworks>
     </PropertyGroup>
     
     <PropertyGroup Label="Nuget">
-        <Version>1.0.3</Version>
+        <Version>1.0.4</Version>
         <Title>WeChatOcr</Title>
         <Description>WeChatOcr, Study only, do not use for commercial purposes</Description>
         <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -14,8 +14,8 @@
     
     <ItemGroup>
       <Content Include="wco_data\**">
-		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		<PackageCopyToOutput>true</PackageCopyToOutput>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
       </Content>
     </ItemGroup>
 

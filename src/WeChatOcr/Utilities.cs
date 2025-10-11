@@ -66,7 +66,7 @@ public partial class Utilities
     /// </param>
     public static void CopyMmmojoDll(string wechatFullDir)
     {
-        var targetPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Constant.WeChatOcrData);
+        var targetPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, DataLocation.WeChatOcrData);
         if (!Directory.Exists(targetPath)) Directory.CreateDirectory(targetPath);
         var mmMojoFullPath = Path.Combine(wechatFullDir, MmMojoDll);
         var mmMojo64FullPath = Path.Combine(wechatFullDir, MmMojo64Dll);

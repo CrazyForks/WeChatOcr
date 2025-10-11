@@ -22,8 +22,10 @@ public class XPluginManager : IDisposable
         if (isMmmojoEnvInited) StopMmMojoEnv();
     }
 
-    public void SetExePath(string exePath = Constant.WeChatOcrData)
+    public void SetExePath(string exePath = "")
     {
+        if (string.IsNullOrEmpty(exePath))
+            exePath = DataLocation.WeChatOcrData;
         const string ocrExeName = "WeChatOCR.exe";
         if (!exePath.EndsWith(ocrExeName) && Directory.Exists(exePath)) exePath = Path.Combine(exePath, ocrExeName);
         if (!File.Exists(exePath)) throw new Exception($"指定的 {ocrExeName} 路径不存在!");
