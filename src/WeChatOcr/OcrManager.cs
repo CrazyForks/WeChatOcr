@@ -18,8 +18,15 @@ public class OcrManager : XPluginManager, IDisposable
     private readonly Queue<int> queueIds = [];
     private readonly Stopwatch[] timers = new Stopwatch[OcrMaxTaskId];
     private volatile bool isConnected;
+    private readonly object taskLock = new();
 
     public OcrManager(string? path = default)
+        : this(path, MmmojoApi.Instance, MmmojoRuntime.Shared)
+    {
+    }
+
+    internal OcrManager(string? path, IMmmojoApi native, MmmojoRuntime runtime)
+        : base(native, runtime)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -53,11 +60,13 @@ public class OcrManager : XPluginManager, IDisposable
 
     public void SetOcrResultCallback(Action<string, WeChatOcrResult?> func)
     {
+        ThrowIfDisposed();
         Callback = func;
     }
 
     public void StartWeChatOcr(IntPtr ocrManager)
     {
+        ThrowIfDisposed();
         SetCallbackUsrData(ocrManager);
         SetDefaultCallbacks();
         InitMmMojoEnv();
@@ -66,6 +75,7 @@ public class OcrManager : XPluginManager, IDisposable
 
     public void KillWeChatOcr()
     {
+        if (IsDisposed) return;
         isConnected = false;
         isWeChatOcrRunning = false;
         StopMmMojoEnv();
@@ -73,6 +83,7 @@ public class OcrManager : XPluginManager, IDisposable
 
     public void DoOcrTask(string imgPath)
     {
+        ThrowIfDisposed();
         if (!isWeChatOcrRunning) throw new Exception("请先调用StartWeChatOCR启动");
         if (!File.Exists(imgPath)) throw new FileNotFoundException($"给定图片路径picPath不存在: {imgPath}");
         imgPath = Path.GetFullPath(imgPath);
@@ -91,7 +102,8 @@ public class OcrManager : XPluginManager, IDisposable
 
     public void SendOcrTask(int taskId, string picPath)
     {
-        dicImageID[taskId] = picPath;
+        lock (taskLock)
+            dicImageID[taskId] = picPath;
         var ocrRequest = new OcrRequest
         {
             Unknow = 0,
@@ -119,17 +131,20 @@ public class OcrManager : XPluginManager, IDisposable
     /// </summary>
     public int GetIdleTaskId()
     {
-        var taskId = -1;
-        try
+        lock (taskLock)
         {
-            taskId = queueIds.Dequeue();
-            timers[taskId].Restart();
-        }
-        catch (InvalidOperationException)
-        {
-        }
+            var taskId = -1;
+            try
+            {
+                taskId = queueIds.Dequeue();
+                timers[taskId].Restart();
+            }
+            catch (InvalidOperationException)
+            {
+            }
 
-        return taskId;
+            return taskId;
+        }
     }
 
     /// <summary>
@@ -137,9 +152,14 @@ public class OcrManager : XPluginManager, IDisposable
     /// </summary>
     public void SetTaskIdIdle(int taskId)
     {
-        queueIds.Enqueue(taskId);
-        var lastStr = dicImageID[taskId].Substring(dicImageID[taskId].Length - 16, 16);
-        timers[taskId].Stop();
+        lock (taskLock)
+        {
+            if (!dicImageID.Remove(taskId))
+                return;
+
+            timers[taskId].Stop();
+            queueIds.Enqueue(taskId);
+        }
         //Console.WriteLine($"【…{lastStr}】由任务{taskId,2}完成，耗费【{(int)timers[taskId].Elapsed.TotalMilliseconds}】毫秒");
     }
 
@@ -168,13 +188,19 @@ public class OcrManager : XPluginManager, IDisposable
     public void OCRReadOnPush(uint requestId, IntPtr requestInfo, IntPtr userData)
     {
         //Console.WriteLine($"回调函数【{nameof(OCRReadOnPush)}】被调用，request_id: {requestId}, request_info: {requestInfo}");
-        if (userData == IntPtr.Zero) return;
-        uint pbSize = 0;
-        var pbData = GetPbSerializedData(requestInfo, ref pbSize);
-        if (pbSize <= 20) return;
-        //Console.WriteLine($"正在解析pb数据，pb数据大小: {pbSize}");
-        CallUserCallback(requestId, pbData, (int)pbSize);
-        RemoveReadInfo(requestInfo);
+        if (userData == IntPtr.Zero || requestInfo == IntPtr.Zero) return;
+        try
+        {
+            uint pbSize = 0;
+            var pbData = GetPbSerializedData(requestInfo, ref pbSize);
+            if (pbSize <= 20 || pbData == IntPtr.Zero) return;
+            //Console.WriteLine($"正在解析pb数据，pb数据大小: {pbSize}");
+            CallUserCallback(requestId, pbData, (int)pbSize);
+        }
+        finally
+        {
+            RemoveReadInfo(requestInfo);
+        }
     }
 
     public void CallUserCallback(uint requestId, IntPtr serializedData, int dataSize)
@@ -187,15 +213,57 @@ public class OcrManager : XPluginManager, IDisposable
         //    Console.WriteLine($"回调函数【{nameof(CallUserCallback)}】被调用，ErrCode: {ocrResponse.ErrCode}");
         var jsonResponseStr = ocrResponse.ToString();
         var taskId = ocrResponse.TaskId;
-        if (!dicImageID.TryGetValue(taskId, out var picPath)) return;
-        Callback?.Invoke(picPath, ParseJsonResponse(jsonResponseStr));
-        SetTaskIdIdle(taskId);
+        string? picPath;
+        lock (taskLock)
+            dicImageID.TryGetValue(taskId, out picPath);
+        if (picPath == null) return;
+
+        try
+        {
+            Callback?.Invoke(picPath, ParseJsonResponse(jsonResponseStr));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+        }
+        finally
+        {
+            SetTaskIdIdle(taskId);
+        }
     }
 
-    public new void Dispose()
+    public override void Dispose() => base.Dispose();
+
+    protected override void Dispose(bool disposing)
     {
-        base.Dispose();
-        if (isWeChatOcrRunning) KillWeChatOcr();
+        if (IsDisposed) return;
+
+        try
+        {
+            if (isWeChatOcrRunning) KillWeChatOcr();
+        }
+        finally
+        {
+            Callback = null;
+            lock (taskLock)
+            {
+                dicImageID.Clear();
+                queueIds.Clear();
+                foreach (var timer in timers)
+                    timer.Stop();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    internal int TrackedImageCount
+    {
+        get
+        {
+            lock (taskLock)
+                return dicImageID.Count;
+        }
     }
 }
 
